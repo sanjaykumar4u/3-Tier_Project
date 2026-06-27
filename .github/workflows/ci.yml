@@ -1,0 +1,76 @@
+name: DevSecOps CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+
+  # Stage 1
+  gitleaks:
+    name: Gitleaks Secret Detection
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Gitleaks
+        run: echo "Running Gitleaks"
+
+  # Stage 2 (Parallel)
+  checkov:
+    name: Checkov Scan
+    needs: gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: echo "Running Checkov"
+
+  trivy-fs:
+    name: Trivy Filesystem Scan
+    needs: gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: echo "Running Trivy FS"
+
+  lint:
+    name: Lint
+    needs: gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: echo "Running Linter"
+
+  tests:
+    name: Unit Tests
+    needs: gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: echo "Running Tests"
+
+  # Stage 3
+  sonarqube:
+    name: SonarQube Analysis
+    needs:
+      - checkov
+      - trivy-fs
+      - lint
+      - tests
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: echo "Running SonarQube"
