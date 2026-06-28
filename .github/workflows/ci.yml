@@ -32,6 +32,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Scans all commits in git history for leaked secrets
           GITLEAKS_SCAN_TYPE: git
+          # FIX: unique artifact name — both steps upload results and the default
+          # name is the same for both, causing a 409 Conflict on the second upload
+          GITLEAKS_ARTIFACT_NAME: gitleaks-git-results
 
       - name: Run GitLeaks (directory / all files scan)
         uses: gitleaks/gitleaks-action@v3
@@ -40,6 +43,8 @@ jobs:
           # Scans every file in the working directory including files not tracked by git
           # (generated files, config files, dotfiles, build artifacts checked into the repo)
           GITLEAKS_SCAN_TYPE: directory
+          # FIX: unique artifact name to avoid conflict with the git history scan above
+          GITLEAKS_ARTIFACT_NAME: gitleaks-directory-results
 
   # ─────────────────────────────────────────────
   # Stage 2 (Parallel): Infrastructure & Code Scanning
