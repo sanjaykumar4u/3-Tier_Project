@@ -24,12 +24,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0   # Full history needed for accurate secret scanning
+          fetch-depth: 0   # Full history required to scan all commits, not just HEAD
 
-      - name: Run GitLeaks
+      - name: Run GitLeaks (git history scan)
         uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Scans all commits in git history for leaked secrets
+          GITLEAKS_SCAN_TYPE: git
+
+      - name: Run GitLeaks (directory / all files scan)
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Scans every file in the working directory including files not tracked by git
+          # (generated files, config files, dotfiles, build artifacts checked into the repo)
+          GITLEAKS_SCAN_TYPE: directory
 
   # ─────────────────────────────────────────────
   # Stage 2 (Parallel): Infrastructure & Code Scanning
