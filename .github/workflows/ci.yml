@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Trivy Filesystem Scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -105,7 +105,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Trivy Config Scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: 'config'
           scan-ref: '.'
@@ -138,21 +138,21 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
+          # NOTE: cache: 'npm' is omitted — it requires a committed lockfile
+          # (package-lock.json or yarn.lock). Re-add once one is committed to the repo.
 
       - name: Install Dependencies
-        # FIX: `npm ci` is faster and reproducible (requires package-lock.json);
-        # `npm install` can mutate the lockfile and is slower in CI
-        run: npm ci
+        # `npm install` works without a lockfile; generates one locally for this run.
+        # Switch to `npm ci` once package-lock.json is committed to the repo.
+        run: npm install
 
       - name: Run ESLint
-        # FIX: `--if-present` silently skips if the `lint` script isn't in package.json,
-        # preventing false failures on repos that haven't configured ESLint yet
+        # `--if-present` silently skips if the `lint` script isn't in package.json
         run: npm run lint --if-present
         continue-on-error: true
 
       - name: Run Prettier Check
-        # FIX: same `--if-present` guard for the format:check script
+        # `--if-present` silently skips if `format:check` isn't in package.json
         run: npm run format:check --if-present
         continue-on-error: true
 
@@ -168,16 +168,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
+          # NOTE: cache: 'npm' is omitted — requires a committed lockfile.
+          # Re-add once package-lock.json is committed to the repo.
 
       - name: Install Dependencies
-        # FIX: `npm ci` for reproducible installs
-        run: npm ci
+        # `npm install` works without a lockfile.
+        # Switch to `npm ci` once package-lock.json is committed.
+        run: npm install
 
       - name: Run Unit Tests
-        # FIX: CI=true is required for Create React App (CRA) — without it,
-        # Jest launches in interactive watch mode and hangs the runner.
-        # It also makes Jest treat warnings as errors consistently.
+        # CI=true forces Jest out of interactive watch mode (required for CRA projects)
+        # and treats warnings as errors consistently across environments.
         env:
           CI: true
         run: npm test -- --coverage --watchAll=false
@@ -190,8 +191,7 @@ jobs:
           name: test-results
           path: coverage/
           retention-days: 30
-          # FIX: if tests failed early and coverage/ was never written,
-          # don't fail the upload step — just skip it gracefully
+          # Warn instead of error if tests crashed before writing the coverage directory
           if-no-files-found: warn
 
   # ─────────────────────────────────────────────
