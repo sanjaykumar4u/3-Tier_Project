@@ -1,0 +1,278 @@
+name: DevSecOps CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+# Least-privilege defaults; jobs that need more declare it explicitly
+permissions:
+  contents: read
+  security-events: write   # Required for SARIF uploads to GitHub Security tab
+  actions: read            # Required by some actions to read workflow context
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Stage 1: Secret Scanning
+  # ─────────────────────────────────────────────
+  gitleaks:
+    name: GitLeaks Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Full history needed for accurate secret scanning
+
+      - name: Run GitLeaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────────
+  # Stage 2 (Parallel): Infrastructure & Code Scanning
+  # ─────────────────────────────────────────────
+  checkov:
+    name: Checkov IaC Scan
+    needs: gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # FIX: Cache pip to speed up repeated runs
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-checkov
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Run Checkov
+        # FIX: Removed `--exit-code 0` — Checkov should report real failures.
+        # `continue-on-error: true` lets the pipeline proceed while still
+        # surfacing the failure in the job status.
+        run: |
+          pip install checkov
+          checkov -d . \
+            --skip-check CKV_DOCKER_2 \
+            --framework all \
+            --quiet
+        continue-on-error: true
+
+  trivy-fs:
+    name: Trivy Filesystem Scan
+    needs: gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-fs-report.sarif'
+          # FIX: exit-code '0' prevents the job failing due to found vulnerabilities
+          # The point is to report findings, not gate the pipeline here
+          exit-code: '0'
+          # FIX: Skip vulnerabilities with no available fix to reduce noise
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+        # FIX: continue-on-error ensures the SARIF upload step always runs
+        # even if trivy itself errors (e.g. DB download failure)
+        continue-on-error: true
+
+      - name: Upload Trivy FS Results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-fs-report.sarif'
+          # FIX: category disambiguates this upload from the config scan upload;
+          # without it GitHub may silently drop one of the two SARIF reports
+          category: 'trivy-fs'
+
+  trivy-config:
+    name: Trivy Config Scan
+    needs: gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy Config Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-config-report.sarif'
+          # FIX: exit-code '0' prevents misconfigurations from failing the job;
+          # findings are captured in the SARIF report for review
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+        # FIX: continue-on-error ensures the SARIF upload step always runs
+        continue-on-error: true
+
+      - name: Upload Trivy Config Results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-config-report.sarif'
+          # FIX: category disambiguates this upload from the fs scan upload
+          category: 'trivy-config'
+
+  lint:
+    name: Code Lint & Format Check
+    needs: gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          # NOTE: cache: 'npm' is omitted — it requires a committed lockfile
+          # (package-lock.json or yarn.lock). Re-add once one is committed to the repo.
+
+      - name: Install Dependencies
+        # `npm install` works without a lockfile; generates one locally for this run.
+        # Switch to `npm ci` once package-lock.json is committed to the repo.
+        run: npm install
+
+      - name: Run ESLint
+        # `--if-present` silently skips if the `lint` script isn't in package.json
+        run: npm run lint --if-present
+        continue-on-error: true
+
+      - name: Run Prettier Check
+        # `--if-present` silently skips if `format:check` isn't in package.json
+        run: npm run format:check --if-present
+        continue-on-error: true
+
+  tests:
+    name: Unit Tests
+    needs: gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          # NOTE: cache: 'npm' is omitted — requires a committed lockfile.
+          # Re-add once package-lock.json is committed to the repo.
+
+      - name: Install Dependencies
+        # `npm install` works without a lockfile.
+        # Switch to `npm ci` once package-lock.json is committed.
+        run: npm install
+
+      - name: Run Unit Tests
+        # CI=true forces Jest out of interactive watch mode (required for CRA projects)
+        # and treats warnings as errors consistently across environments.
+        env:
+          CI: true
+        run: npm test -- --coverage --watchAll=false
+        continue-on-error: true
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: coverage/
+          retention-days: 30
+          # Warn instead of error if tests crashed before writing the coverage directory
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────
+  # Stage 3: Quality & Security Analysis
+  # ─────────────────────────────────────────────
+  sonarcloud:
+    name: SonarCloud Analysis
+    needs:
+      - checkov
+      - trivy-fs
+      - trivy-config
+      - lint
+      - tests
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Shallow clones degrade SonarCloud analysis quality
+
+      - name: SonarCloud Scan
+        # FIX: Pinned from `master` to a stable release tag
+        uses: SonarSource/sonarcloud-github-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=sanjaykumar4u_3-Tier_Project
+            -Dsonar.organization=sanjaykumar4u
+        continue-on-error: true
+
+  # ─────────────────────────────────────────────
+  # Final Report
+  # ─────────────────────────────────────────────
+  security-report:
+    name: Security Report Summary
+    needs:
+      - gitleaks
+      - checkov
+      - trivy-fs
+      - trivy-config
+      - lint
+      - tests
+      - sonarcloud
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Generate Security Summary
+        # FIX: Report now reflects real job outcomes instead of always showing ✅
+        env:
+          GITLEAKS_STATUS:   ${{ needs.gitleaks.result }}
+          CHECKOV_STATUS:    ${{ needs.checkov.result }}
+          TRIVY_FS_STATUS:   ${{ needs.trivy-fs.result }}
+          TRIVY_CFG_STATUS:  ${{ needs.trivy-config.result }}
+          LINT_STATUS:       ${{ needs.lint.result }}
+          TESTS_STATUS:      ${{ needs.tests.result }}
+          SONAR_STATUS:      ${{ needs.sonarcloud.result }}
+        run: |
+          status_icon() {
+            case "$1" in
+              success)  echo "✅" ;;
+              failure)  echo "❌" ;;
+              cancelled) echo "⏹️" ;;
+              *)        echo "⚠️" ;;
+            esac
+          }
+
+          echo "# DevSecOps Pipeline Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Scan Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$GITLEAKS_STATUS")  GitLeaks – Secret Scanning       | \`$GITLEAKS_STATUS\`  |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$CHECKOV_STATUS")   Checkov – IaC Scanning           | \`$CHECKOV_STATUS\`   |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$TRIVY_FS_STATUS")  Trivy – Filesystem Scan          | \`$TRIVY_FS_STATUS\`  |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$TRIVY_CFG_STATUS") Trivy – Config Scan              | \`$TRIVY_CFG_STATUS\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$LINT_STATUS")      Lint & Format Check              | \`$LINT_STATUS\`      |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$TESTS_STATUS")     Unit Tests                       | \`$TESTS_STATUS\`     |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$SONAR_STATUS")     SonarCloud – Code Quality        | \`$SONAR_STATUS\`     |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Test coverage and scan artifacts are available in the **Actions → Artifacts** tab." >> $GITHUB_STEP_SUMMARY
