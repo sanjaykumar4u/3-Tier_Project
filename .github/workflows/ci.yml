@@ -32,33 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install Checkov
-        run: |
-          pip install --upgrade pip
-          pip install checkov
-
       - name: Run Checkov
         id: checkov
         run: |
+          pip install checkov
           checkov -d . \
             --skip-check CKV_DOCKER_2 \
             --framework all \
-            --output cli \
-            --soft-fail || true
+            --quiet \
+            --exit-code 0 || true
         continue-on-error: true
-
-      - name: Upload Checkov Results
-        if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: checkov-report
-          path: checkov-report.json
-          retention-days: 30
 
   trivy-fs:
     name: Trivy Filesystem Scan
@@ -112,34 +95,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
+          node-version: '18'
+          cache: 'npm'
 
-      - name: Install Python Linters
-        run: |
-          pip install --upgrade pip
-          pip install pylint flake8 black isort
+      - name: Install Dependencies
+        run: npm install
 
-      - name: Run Python Linters
-        id: pylint
-        run: |
-          echo "=== Running Flake8 ==="
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
-          
-          echo "=== Running Black (check mode) ==="
-          black . --check --diff || true
-          
-          echo "=== Running isort (check mode) ==="
-          isort . --check-only --diff || true
+      - name: Run ESLint
+        run: npm run lint || true
         continue-on-error: true
 
-      - name: Install Node Linters (if applicable)
-        if: hashFiles('package.json') != ''
-        run: |
-          npm install
-          npm run lint || true
+      - name: Run Prettier (if configured)
+        run: npm run format:check || true
         continue-on-error: true
 
   tests:
@@ -150,27 +120,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
+          node-version: '18'
+          cache: 'npm'
 
-      - name: Install Python Dependencies
-        run: |
-          pip install --upgrade pip
-          pip install pytest pytest-cov pytest-xdist
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+      - name: Install Dependencies
+        run: npm install
 
-      - name: Run Python Unit Tests
-        id: pytest
+      - name: Run Unit Tests
+        id: jest
         run: |
-          pytest . \
-            --junitxml=junit.xml \
-            --cov=. \
-            --cov-report=xml \
-            --cov-report=html \
-            -v || true
+          npm test -- --coverage --watchAll=false || true
         continue-on-error: true
 
       - name: Upload Test Results
@@ -178,22 +140,8 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: test-results
-          path: junit.xml
+          path: coverage/
           retention-days: 30
-
-      - name: Upload Coverage Report
-        if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: coverage-report
-          path: htmlcov/
-          retention-days: 30
-
-      - name: Publish Coverage to PR
-        if: always()
-        uses: py-cov-action/python-coverage-comment-action@v3
-        with:
-          GITHUB_TOKEN: ${{ github.token }}
 
   # Stage 3: Quality & Security Analysis
   sonarcloud:
@@ -205,6 +153,7 @@ jobs:
       - lint
       - tests
     runs-on: ubuntu-latest
+    if: always()
 
     steps:
       - uses: actions/checkout@v4
