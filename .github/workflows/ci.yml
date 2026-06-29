@@ -8,105 +8,103 @@ on:
     branches:
       - main
 
+# Least-privilege defaults; security-events:write is needed to upload SARIF reports
 permissions:
   contents: read
   security-events: write
   actions: read
 
 jobs:
-  # ── Stage 1: Secret scanning (gate for everything else) ──────────────────
+  # Stage 1: Secret scanning (gate for everything else)
   gitleaks:
     name: GitLeaks Secret Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4          # ← fixed: v4
+      - uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # Full git history for accurate scanning
 
       - name: Run GitLeaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── Stage 2: Parallel scans (all need gitleaks to pass) ──────────────────
+  # Stage 2: Code, IaC and dependency scanning (run in parallel after gitleaks)
   checkov:
     name: Checkov IaC Scan
     needs: gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4          # ← fixed: v4
-        with:
-          fetch-depth: 0                   # ← added: full history for accuracy
+      - uses: actions/checkout@v5
 
       - name: Checkov GitHub Action
         uses: bridgecrewio/checkov-action@v12
         with:
           output_format: cli,sarif
           output_file_path: console,results.sarif
-        continue-on-error: true
+        continue-on-error: true   # Report findings, don't fail the job
 
       - name: Upload SARIF file
         uses: github/codeql-action/upload-sarif@v3
         if: success() || failure()
         with:
           sarif_file: results.sarif
-          category: checkov
+          category: 'checkov'   # Keeps this report separate from the others
 
   trivy-fs:
     name: Trivy Filesystem Scan
     needs: gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4          # ← fixed: v4
-        with:
-          fetch-depth: 0                   # ← added
+      - uses: actions/checkout@v5
 
       - name: Run Trivy Filesystem Scan
-        uses: aquasecurity/trivy-action@d63571eff523cfe8e63f7f1688f8eba34ada9cfa  # ← fixed: pinned to commit SHA (0.35.0)
+        # TODO: pin to a commit SHA (trivy-action supply-chain compromise, Jan 2026)
+        uses: aquasecurity/trivy-action@0.35.0
         with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-fs-report.sarif
-          exit-code: '0'
-          ignore-unfixed: true
-          severity: CRITICAL,HIGH
-        continue-on-error: true
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-fs-report.sarif'
+          exit-code: '0'          # Report only, don't fail the job
+          ignore-unfixed: true    # Skip vulns with no fix available
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true   # Still upload SARIF even if the scan errors
 
       - name: Upload Trivy FS Results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: trivy-fs-report.sarif
-          category: trivy-fs
+          sarif_file: 'trivy-fs-report.sarif'
+          category: 'trivy-fs'
 
   trivy-config:
     name: Trivy Config Scan
     needs: gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4          # ← fixed: v4
-        with:
-          fetch-depth: 0                   # ← added
+      - uses: actions/checkout@v5
 
       - name: Run Trivy Config Scan
-        uses: aquasecurity/trivy-action@d63571eff523cfe8e63f7f1688f8eba34ada9cfa  # ← fixed: pinned to commit SHA (0.35.0)
+        # TODO: pin to a commit SHA (trivy-action supply-chain compromise, Jan 2026)
+        uses: aquasecurity/trivy-action@0.35.0
         with:
-          scan-type: config
-          scan-ref: .
-          format: sarif
-          output: trivy-config-report.sarif
-          exit-code: '0'
-          severity: CRITICAL,HIGH,MEDIUM
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-config-report.sarif'
+          exit-code: '0'          # Report only, don't fail the job
+          severity: 'CRITICAL,HIGH,MEDIUM'
         continue-on-error: true
 
       - name: Upload Trivy Config Results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: trivy-config-report.sarif
-          category: trivy-config
+          sarif_file: 'trivy-config-report.sarif'
+          category: 'trivy-config'
 
+  # Monorepo: lint each workspace against its own lockfile
   lint:
     name: Code Lint & Format Check
     needs: gitleaks
@@ -116,13 +114,13 @@ jobs:
       matrix:
         workspace: [client, server]
     steps:
-      - uses: actions/checkout@v4          # ← fixed: v4
+      - uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4        # ← fixed: v4
+        uses: actions/setup-node@v5
         with:
           node-version: '18'
-          cache: npm
+          cache: 'npm'
           cache-dependency-path: ${{ matrix.workspace }}/package-lock.json
 
       - name: Install Dependencies
@@ -131,7 +129,7 @@ jobs:
 
       - name: Run ESLint
         working-directory: ${{ matrix.workspace }}
-        run: npm run lint --if-present
+        run: npm run lint --if-present   # Skips workspaces without a lint script
         continue-on-error: true
 
       - name: Run Prettier Check
@@ -139,6 +137,7 @@ jobs:
         run: npm run format:check --if-present
         continue-on-error: true
 
+  # Monorepo: build + test each workspace against its own lockfile
   tests:
     name: Unit Tests
     needs: gitleaks
@@ -148,13 +147,13 @@ jobs:
       matrix:
         workspace: [client, server]
     steps:
-      - uses: actions/checkout@v4          # ← fixed: v4
+      - uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4        # ← fixed: v4
+        uses: actions/setup-node@v5
         with:
           node-version: '18'
-          cache: npm
+          cache: 'npm'
           cache-dependency-path: ${{ matrix.workspace }}/package-lock.json
 
       - name: Install Dependencies
@@ -163,12 +162,12 @@ jobs:
 
       - name: Build
         working-directory: ${{ matrix.workspace }}
-        run: npm run build --if-present
+        run: npm run build --if-present   # Compiles client (webpack); server has no build
 
       - name: Run Unit Tests
         working-directory: ${{ matrix.workspace }}
         env:
-          CI: true
+          CI: true   # Disables interactive watch mode
         run: npm test --if-present
         continue-on-error: true
 
@@ -181,7 +180,7 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
-  # ── Stage 3: Code quality (waits for all scans) ──────────────────────────
+  # Stage 3: Code quality analysis (waits for all scans; runs even if they fail)
   sonarcloud:
     name: SonarCloud Analysis
     needs:
@@ -193,9 +192,9 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - uses: actions/checkout@v4          # ← fixed: v4
+      - uses: actions/checkout@v5
         with:
-          fetch-depth: 0                   # Full history improves analysis quality
+          fetch-depth: 0   # Full history improves analysis quality
 
       - name: SonarQube Cloud Scan
         uses: SonarSource/sonarqube-scan-action@v5
@@ -209,7 +208,7 @@ jobs:
             -Dsonar.organization=sanjaykumar4u
         continue-on-error: true
 
-  # ── Final: Summary report ─────────────────────────────────────────────────
+  # Final report: summarize every job's result in the GitHub run summary
   security-report:
     name: Security Report Summary
     needs:
@@ -225,34 +224,35 @@ jobs:
     steps:
       - name: Generate Security Summary
         env:
-          GITLEAKS_STATUS:  ${{ needs.gitleaks.result }}
-          CHECKOV_STATUS:   ${{ needs.checkov.result }}
-          TRIVY_FS_STATUS:  ${{ needs.trivy-fs.result }}
-          TRIVY_CFG_STATUS: ${{ needs.trivy-config.result }}
-          LINT_STATUS:      ${{ needs.lint.result }}
-          TESTS_STATUS:     ${{ needs.tests.result }}
-          SONAR_STATUS:     ${{ needs.sonarcloud.result }}
+          GITLEAKS_STATUS:   ${{ needs.gitleaks.result }}
+          CHECKOV_STATUS:    ${{ needs.checkov.result }}
+          TRIVY_FS_STATUS:   ${{ needs.trivy-fs.result }}
+          TRIVY_CFG_STATUS:  ${{ needs.trivy-config.result }}
+          LINT_STATUS:       ${{ needs.lint.result }}
+          TESTS_STATUS:      ${{ needs.tests.result }}
+          SONAR_STATUS:      ${{ needs.sonarcloud.result }}
         run: |
+          # Map a job result to an icon
           status_icon() {
             case "$1" in
-              success)   echo "✅" ;;
-              failure)   echo "❌" ;;
+              success)  echo "✅" ;;
+              failure)  echo "❌" ;;
               cancelled) echo "⏹️" ;;
-              *)         echo "⚠️" ;;
+              *)        echo "⚠️" ;;
             esac
           }
 
-          echo "# DevSecOps Pipeline Report"                                                                >> $GITHUB_STEP_SUMMARY
-          echo ""                                                                                            >> $GITHUB_STEP_SUMMARY
-          echo "## Scan Results Summary"                                                                    >> $GITHUB_STEP_SUMMARY
-          echo "| Check | Status |"                                                                         >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|"                                                                         >> $GITHUB_STEP_SUMMARY
-          echo "| $(status_icon "$GITLEAKS_STATUS")  GitLeaks – Secret Scanning  | \`$GITLEAKS_STATUS\`  |" >> $GITHUB_STEP_SUMMARY
-          echo "| $(status_icon "$CHECKOV_STATUS")   Checkov – IaC Scanning      | \`$CHECKOV_STATUS\`   |" >> $GITHUB_STEP_SUMMARY
-          echo "| $(status_icon "$TRIVY_FS_STATUS")  Trivy – Filesystem Scan     | \`$TRIVY_FS_STATUS\`  |" >> $GITHUB_STEP_SUMMARY
-          echo "| $(status_icon "$TRIVY_CFG_STATUS") Trivy – Config Scan         | \`$TRIVY_CFG_STATUS\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| $(status_icon "$LINT_STATUS")      Lint & Format Check         | \`$LINT_STATUS\`      |" >> $GITHUB_STEP_SUMMARY
-          echo "| $(status_icon "$TESTS_STATUS")     Unit Tests                  | \`$TESTS_STATUS\`     |" >> $GITHUB_STEP_SUMMARY
-          echo "| $(status_icon "$SONAR_STATUS")     SonarCloud – Code Quality   | \`$SONAR_STATUS\`     |" >> $GITHUB_STEP_SUMMARY
-          echo ""                                                                                            >> $GITHUB_STEP_SUMMARY
-          echo "Artifacts and coverage are in the **Actions → Artifacts** tab."                            >> $GITHUB_STEP_SUMMARY
+          echo "# DevSecOps Pipeline Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Scan Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$GITLEAKS_STATUS")  GitLeaks – Secret Scanning       | \`$GITLEAKS_STATUS\`  |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$CHECKOV_STATUS")   Checkov – IaC Scanning           | \`$CHECKOV_STATUS\`   |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$TRIVY_FS_STATUS")  Trivy – Filesystem Scan          | \`$TRIVY_FS_STATUS\`  |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$TRIVY_CFG_STATUS") Trivy – Config Scan              | \`$TRIVY_CFG_STATUS\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$LINT_STATUS")      Lint & Format Check              | \`$LINT_STATUS\`      |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$TESTS_STATUS")     Unit Tests                       | \`$TESTS_STATUS\`     |" >> $GITHUB_STEP_SUMMARY
+          echo "| $(status_icon "$SONAR_STATUS")     SonarCloud – Code Quality        | \`$SONAR_STATUS\`     |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts and coverage are in the **Actions → Artifacts** tab." >> $GITHUB_STEP_SUMMARY
