@@ -40,28 +40,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      # Checks-out your repository under $GITHUB_WORKSPACE, so follow-up steps can access it
+      - uses: actions/checkout@v3
 
-      # FIX: Cache pip to speed up repeated runs
-      - name: Cache pip
-        uses: actions/cache@v5
+      - name: Checkov GitHub Action
+        uses: bridgecrewio/checkov-action@v12
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-checkov
-          restore-keys: ${{ runner.os }}-pip-
-
-      - name: Run Checkov
-        # FIX: Removed `--exit-code 0` — Checkov should report real failures.
-        # `continue-on-error: true` lets the pipeline proceed while still
-        # surfacing the failure in the job status.
-        run: |
-          pip install checkov
-          checkov -d . \
-            --skip-check CKV_DOCKER_2 \
-            --framework all \
-            --quiet
-        continue-on-error: true
-
+          # This will add both a CLI output to the console and create a results.sarif file
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
+        
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v2
+        
+        if: success() || failure()
+        with:
+          sarif_file: results.sarif
   trivy-fs:
     name: Trivy Filesystem Scan
     needs: gitleaks
